@@ -1,29 +1,39 @@
 import { Effect, Schema } from "effect"
-import { LLM, LLMRequest, ToolRuntime, toDefinitions } from "../src/effect.js"
+import {
+  LLM,
+  LLMRequest,
+  ToolFailure,
+  ToolRuntime,
+  toDefinitions,
+  tool,
+  type AnyExecutableTool,
+  type AnyTool,
+  type ExecutableTool,
+} from "../src/effect.js"
 import * as OpenAIChat from "../src/protocols/openai-chat.js"
 import { Auth } from "../src/route.js"
-import { Tool } from "../src/tool.js"
 import { AI } from "../src/index.js"
+import type { Definition } from "../src/tool.js"
 
 const request = LLM.request({
   model: OpenAIChat.route.with({ auth: Auth.bearer("fixture") }).model({ id: "gpt-4o-mini" }),
   prompt: "Use the tool.",
 })
 
-const executable = Tool.make({
+const executable = tool({
   description: "Get weather.",
   parameters: Schema.Struct({ city: Schema.String }),
   success: Schema.Struct({ forecast: Schema.String }),
   execute: (input) => Effect.succeed({ forecast: input.city }),
 })
 
-const schemaOnly = Tool.make({
+const schemaOnly = tool({
   description: "Get weather.",
   parameters: Schema.Struct({ city: Schema.String }),
   success: Schema.Struct({ forecast: Schema.String }),
 })
 
-Tool.make({
+tool({
   description: "Encode success before projection.",
   parameters: Schema.Struct({ city: Schema.String }),
   success: Schema.Struct({ forecast: Schema.NumberFromString }),
@@ -42,7 +52,7 @@ LLM.stream({ request, tools: { schemaOnly } })
 
 const code = Schema.Struct({ code: Schema.String })
 
-Tool.make({
+tool({
   description: "Run JavaScript.",
   parameters: code,
   success: Schema.String,
@@ -57,11 +67,11 @@ AI.tool({
   execute: (input) => input.code,
 })
 
-Tool.make({
+tool({
   description: "Run JavaScript.",
-  // @ts-expect-error A freeform tool's only parameter must be a string.
   parameters: Schema.Struct({ code: Schema.Number }),
   success: Schema.String,
+  // @ts-expect-error A freeform tool's only parameter must be a string.
   freeform: { type: "text" },
 })
 
@@ -80,3 +90,52 @@ AI.tool({
   freeform: { type: "text" },
   execute: () => undefined,
 })
+
+const sum = {
+  description: "Add two numbers.",
+  parameters: Schema.Struct({ a: Schema.Number, b: Schema.Number }),
+  success: Schema.Number,
+  toModelOutput: ({ output }: { readonly output: number }) => [{ type: "text" as const, text: String(output) }],
+  toStructuredOutput: (output: number) => ({ sum: output }),
+}
+
+const effectSum: ExecutableTool<typeof sum.parameters, typeof Schema.Number> = tool({
+  ...sum,
+  execute: ({ a, b }) => Effect.succeed(a + b),
+})
+const promiseSum: ExecutableTool<typeof sum.parameters, typeof Schema.Number> = AI.tool({
+  ...sum,
+  execute: async ({ a, b }, { signal }) => (signal.aborted ? 0 : a + b),
+})
+const effectDeclared: Definition<typeof sum.parameters, typeof Schema.Number> = tool(sum)
+const promiseDeclared: Definition<typeof sum.parameters, typeof Schema.Number> = AI.tool(sum)
+toDefinitions({ effectSum, promiseSum, effectDeclared, promiseDeclared })
+
+tool({ ...sum, execute: () => new ToolFailure({ message: "No sum." }) })
+AI.tool({ ...sum, execute: () => 1 })
+
+// @ts-expect-error The Effect tool's execute returns an Effect.
+tool({ ...sum, execute: ({ a, b }) => a + b })
+// @ts-expect-error The execute result must match `success`.
+tool({ ...sum, execute: () => Effect.succeed("3") })
+// @ts-expect-error The execute result must match `success`.
+AI.tool({ ...sum, execute: async () => "3" })
+
+const unvalidated = {
+  description: "Echo.",
+  parameters: Schema.Struct({ text: Schema.String }),
+  toModelOutput: ({ output }: { readonly output: unknown }) => [{ type: "text" as const, text: String(output) }],
+}
+tool({ ...unvalidated, execute: ({ text }) => Effect.succeed({ text }) })
+AI.tool({ ...unvalidated, execute: ({ text }) => ({ text }) })
+
+const dynamic = {
+  description: "Look something up.",
+  jsonSchema: { type: "object" },
+  outputSchema: { type: "string" },
+}
+const effectDynamic: AnyExecutableTool = tool({ ...dynamic, execute: (params) => Effect.succeed(params) })
+const promiseDynamic: AnyExecutableTool = AI.tool({ ...dynamic, execute: async (params) => params })
+const effectDynamicDeclared: AnyTool = tool(dynamic)
+const promiseDynamicDeclared: AnyTool = AI.tool(dynamic)
+toDefinitions({ effectDynamic, promiseDynamic, effectDynamicDeclared, promiseDynamicDeclared })

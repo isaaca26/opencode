@@ -6,7 +6,7 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpClientRequest } from "effect/http"
 import { AIError, LLMEvent, Media, SpeechEvent, TranscriptionEvent } from "../src/effect.js"
 import { RequestExecutor } from "../src/route.js"
-import { AI } from "../src/index.js"
+import { AI, tool } from "../src/index.js"
 import { AssemblyAI, OpenAI, Runway } from "../src/providers.js"
 import { handlerLayer, json } from "./lib/http.js"
 import { finishChunk, toolCallChunk } from "./lib/openai-chunks.js"
@@ -401,7 +401,7 @@ describe("AI promise client", () => {
         ),
       ),
     })
-    const read_file = AI.tool({
+    const read_file = tool({
       description: "Read a file.",
       parameters: Schema.Struct({ path: Schema.String }),
       execute: async ({ path }) => {

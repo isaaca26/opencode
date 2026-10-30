@@ -35,7 +35,18 @@ import {
   type TranscriptionRequest,
   type TranscriptionRequestInput,
 } from "./transcription.js"
-import { Tool, ToolFailure, type FreeformOption, type ToolExecuteContext, type ToolSchema } from "./tool.js"
+import {
+  Tool,
+  ToolFailure,
+  type AnyExecutableTool,
+  type AnyTool,
+  type Definition,
+  type DynamicToolOptions,
+  type ExecutableTool,
+  type ToolExecuteContext,
+  type ToolOptions,
+  type ToolSchema,
+} from "./tool.js"
 import { fileMediaType } from "./utils/media-type.js"
 import { Video, type VideoModel, type VideoRequest, type VideoRequestInput } from "./video.js"
 
@@ -278,30 +289,43 @@ export type Client<R = never> = ReturnType<typeof make<R>>
 const fileError = (message: string, cause: unknown) =>
   new AIError({ reason: new InvalidRequestError({ message, cause }) })
 
+export type PromiseToolExecute<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> = (
+  params: Schema.Schema.Type<Parameters>,
+  context: Partial<ToolExecuteContext> & { readonly signal: AbortSignal },
+) => Schema.Schema.Type<Success> | PromiseLike<Schema.Schema.Type<Success>>
+
 /**
- * Promise counterpart of `Tool.make` for `ai.llm.loop`. A throw or rejection becomes the error result the model sees, the
- * returned value is sent unvalidated (`undefined` as `null`), and `signal` aborts when the loop is interrupted.
+ * The Effect `tool` with a plain or async `execute`. A throw or rejection becomes the error result the model sees, and
+ * `signal` aborts when the loop is interrupted.
  */
-export const tool = <Parameters extends ToolSchema<any>>(config: {
-  readonly description: string
-  readonly parameters: Parameters
-  readonly freeform?: FreeformOption<Parameters>
-  readonly execute: (
-    params: Schema.Schema.Type<Parameters>,
-    context: Partial<ToolExecuteContext> & { readonly signal: AbortSignal },
-  ) => unknown
-}) =>
-  Tool.make({
-    description: config.description,
-    parameters: config.parameters,
-    success: Schema.Unknown,
-    freeform: config.freeform,
-    execute: (params, context) =>
-      Effect.tryPromise({
-        try: async (signal) => (await config.execute(params, { ...context, signal })) ?? null,
-        catch: (error) => new ToolFailure({ message: error instanceof Error ? error.message : String(error), error }),
-      }),
-  })
+export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): AnyTool
+export function tool(
+  config: DynamicToolOptions & { readonly execute: PromiseToolExecute<ToolSchema<unknown>, ToolSchema<unknown>> },
+): AnyExecutableTool
+export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = typeof Schema.Unknown>(
+  config: ToolOptions<Parameters, Success> & { readonly execute?: undefined },
+): Definition<Parameters, Success>
+export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = typeof Schema.Unknown>(
+  config: ToolOptions<Parameters, Success> & { readonly execute: PromiseToolExecute<Parameters, Success> },
+): ExecutableTool<Parameters, Success>
+export function tool(
+  config: (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicToolOptions) & {
+    readonly execute?: PromiseToolExecute<ToolSchema<any>, ToolSchema<any>>
+  },
+): AnyTool {
+  const execute = config.execute
+  // The overloads type each mode; the Effect implementation handles them all at runtime.
+  return Tool.tool({
+    ...config,
+    execute:
+      execute &&
+      ((params: unknown, context?: ToolExecuteContext) =>
+        Effect.tryPromise({
+          try: async (signal) => execute(params, { ...context, signal }),
+          catch: (error) => new ToolFailure({ message: error instanceof Error ? error.message : String(error), error }),
+        })),
+  } as Parameters<typeof Tool.tool>[0])
+}
 
 /** Default client over `RequestExecutor.fetchLayer` for scripts; the runtime builds its layer on first use. */
 export const ai = make()

@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
-import { LanguageModel, LLM, LLMEvent, Tool, ToolFailure } from "../src/effect.js"
+import { LanguageModel, LLM, LLMEvent, ToolFailure, tool } from "../src/effect.js"
 import { OpenAIChat } from "../src/protocols/openai-chat.js"
 import { TestLLM } from "../src/testing.js"
 import { testEffect } from "./lib/effect.js"
@@ -8,7 +8,7 @@ import { testEffect } from "./lib/effect.js"
 const model = LanguageModel.make({ id: "fictional-model", provider: "fixture", route: OpenAIChat.route })
 const it = testEffect(TestLLM.testLayer())
 
-const read_file = Tool.make({
+const read_file = tool({
   description: "Read a file.",
   parameters: Schema.Struct({ path: Schema.String }),
   success: Schema.String,
@@ -61,7 +61,7 @@ describe("LLM.loop", () => {
     Effect.gen(function* () {
       const client = yield* TestLLM.Test
       yield* client.push(
-        TestLLM.tool("call-1", "read_file", { path: "missing.txt" }),
+        TestLLM.toolCall("call-1", "read_file", { path: "missing.txt" }),
         TestLLM.text("That file does not exist.", "text-1"),
       )
 
@@ -81,7 +81,7 @@ describe("LLM.loop", () => {
   it.effect("stops when until returns true without running that step's tools", () =>
     Effect.gen(function* () {
       const client = yield* TestLLM.Test
-      yield* client.always(TestLLM.tool("call-1", "read_file", { path: "a.txt" }))
+      yield* client.always(TestLLM.toolCall("call-1", "read_file", { path: "a.txt" }))
       const seen: number[] = []
 
       const events = yield* collect(({ steps }) => {

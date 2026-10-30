@@ -98,34 +98,42 @@ export type AnyExecutableTool = ExecutableTool<any, any>
 
 export type ExecutableTools = Record<string, AnyExecutableTool>
 
-type TypedToolConfig = {
+/** Options shared by the Effect `tool` and the Promise `tool`; only `execute` differs. */
+export interface ToolOptions<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> {
   readonly description: string
-  readonly parameters: ToolSchema<any>
-  readonly success: ToolSchema<any>
-  readonly freeform?: Freeform
-  readonly execute?: ToolExecute<ToolSchema<any>, ToolSchema<any>>
-  readonly toModelOutput?: ToolToModelOutput<ToolSchema<any>, ToolSchema<any>>
-  readonly toStructuredOutput?: (output: unknown) => unknown
+  readonly parameters: Parameters
+  /** Validates and encodes the execute result. Omit it to send the result unvalidated, with `undefined` as `null`. */
+  readonly success?: Success
+  readonly freeform?: FreeformOption<Parameters>
+  readonly toModelOutput?: ToolToModelOutput<Parameters, Success>
+  readonly toStructuredOutput?: (output: Success["Encoded"]) => unknown
 }
 
-type DynamicToolConfig = {
+/** Options for a tool whose input schema is raw JSON Schema, such as one from an MCP server. */
+export interface DynamicToolOptions {
   readonly description: string
   readonly jsonSchema: JsonSchema.JsonSchema
   readonly outputSchema?: JsonSchema.JsonSchema
   readonly freeform?: Freeform
-  readonly execute?: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
   readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<Tool.Content>
   readonly toStructuredOutput?: (output: unknown) => unknown
 }
 
+type UnknownSuccess = typeof Schema.Unknown
+
+type AnyToolOptions = (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicToolOptions) & {
+  readonly execute?: (params: any, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
+}
+
 /**
- * Constructs a tool. Two input modes:
+ * Constructs a tool whose `execute` returns an Effect. Two input modes:
  *
- * 1. **Typed** — pass Effect `parameters` and `success` Schemas; inputs and
- *    outputs are statically typed and decoded/encoded automatically.
+ * 1. **Typed** — pass an Effect `parameters` Schema and optionally a `success`
+ *    Schema; inputs and outputs are statically typed and decoded/encoded
+ *    automatically.
  *
  *    ```ts
- *    Tool.make({
+ *    tool({
  *      description: "Get current weather",
  *      parameters: Schema.Struct({ city: Schema.String }),
  *      success: Schema.Struct({ temperature: Schema.Number }),
@@ -139,53 +147,30 @@ type DynamicToolConfig = {
  *    `unknown`; the handler is responsible for any validation it needs.
  *
  *    ```ts
- *    Tool.make({
+ *    tool({
  *      description: "Look something up",
  *      jsonSchema: { type: "object", properties: { ... } },
  *      execute: (params) => Effect.succeed(...),
  *    })
  *    ```
  *
+ * Omit `execute` to declare a tool the model can call without running it here.
  * In both modes the produced tool flows through `toDefinitions(...)`
  * identically.
  */
-export function make<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>>(config: {
-  readonly description: string
-  readonly parameters: Parameters
-  readonly success: Success
-  readonly freeform?: FreeformOption<Parameters>
-  readonly execute: ToolExecute<Parameters, Success>
-  readonly toModelOutput?: ToolToModelOutput<Parameters, Success>
-  readonly toStructuredOutput?: (output: Success["Encoded"]) => unknown
-}): ExecutableTool<Parameters, Success>
-export function make<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>>(config: {
-  readonly description: string
-  readonly parameters: Parameters
-  readonly success: Success
-  readonly freeform?: FreeformOption<Parameters>
-  readonly execute?: undefined
-  readonly toModelOutput?: ToolToModelOutput<Parameters, Success>
-  readonly toStructuredOutput?: (output: Success["Encoded"]) => unknown
-}): Definition<Parameters, Success>
-export function make(config: {
-  readonly description: string
-  readonly jsonSchema: JsonSchema.JsonSchema
-  readonly outputSchema?: JsonSchema.JsonSchema
-  readonly freeform?: Freeform
-  readonly execute: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
-  readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<Tool.Content>
-  readonly toStructuredOutput?: (output: unknown) => unknown
-}): AnyExecutableTool
-export function make(config: {
-  readonly description: string
-  readonly jsonSchema: JsonSchema.JsonSchema
-  readonly outputSchema?: JsonSchema.JsonSchema
-  readonly freeform?: Freeform
-  readonly execute?: undefined
-  readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<Tool.Content>
-  readonly toStructuredOutput?: (output: unknown) => unknown
-}): AnyTool
-export function make(config: TypedToolConfig | DynamicToolConfig): AnyTool {
+export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): AnyTool
+export function tool(
+  config: DynamicToolOptions & {
+    readonly execute: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
+  },
+): AnyExecutableTool
+export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = UnknownSuccess>(
+  config: ToolOptions<Parameters, Success> & { readonly execute?: undefined },
+): Definition<Parameters, Success>
+export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = UnknownSuccess>(
+  config: ToolOptions<Parameters, Success> & { readonly execute: ToolExecute<Parameters, Success> },
+): ExecutableTool<Parameters, Success>
+export function tool(config: AnyToolOptions): AnyTool {
   if ("jsonSchema" in config) {
     return {
       description: config.description,
@@ -211,12 +196,12 @@ export function make(config: TypedToolConfig | DynamicToolConfig): AnyTool {
   return {
     description: config.description,
     parameters: config.parameters,
-    success: config.success,
+    success: config.success ?? Schema.Unknown,
     execute: config.execute,
     toModelOutput: config.toModelOutput,
     toStructuredOutput: config.toStructuredOutput,
     _decode: Schema.decodeUnknownEffect(config.parameters),
-    _encode: Schema.encodeEffect(config.success),
+    _encode: config.success ? Schema.encodeEffect(config.success) : (value) => Effect.succeed(value ?? null),
     _project: (parameters, id, output) =>
       project(config.toModelOutput, config.toStructuredOutput, parameters, id, output),
     _legacyResult: false,
@@ -224,7 +209,7 @@ export function make(config: TypedToolConfig | DynamicToolConfig): AnyTool {
       name: "",
       description: config.description,
       inputSchema: emptyInputJsonSchema(config.parameters) ?? toJsonSchema(config.parameters),
-      outputSchema: toJsonSchema(config.success),
+      outputSchema: config.success && toJsonSchema(config.success),
       freeform: config.freeform,
     }),
   }

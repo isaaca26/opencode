@@ -18,7 +18,7 @@ import {
   type LanguageModelProviderOptions,
   type ToolEntryInput,
 } from "./schema/index.js"
-import { make as makeTool, toDefinitions, type ExecutableTools, type ToolSchema } from "./tool.js"
+import { tool, toDefinitions, type AnyTool, type ExecutableTools, type ToolSchema } from "./tool.js"
 import { ToolRuntime } from "./tool-runtime.js"
 
 /** Input accepted by `LLM.request`, normalized into the canonical `LLMRequest` class. */
@@ -187,7 +187,7 @@ export interface GenerateObjectDynamicOptions<SelectedLanguageModel extends Lang
 
 const runGenerateObject = Effect.fn("LLM.generateObject")(function* (
   options: GenerateObjectBase,
-  tool: ReturnType<typeof makeTool>,
+  tool: AnyTool,
 ) {
   const baseRequest = request(options)
   const generateRequest = LLMRequest.update(baseRequest, {
@@ -239,10 +239,9 @@ export function generateObject(options: GenerateObjectOptions<ToolSchema<any>> |
     const { schema, ...rest } = options
     return runGenerateObject(
       rest,
-      makeTool({
+      tool({
         description: GENERATE_OBJECT_TOOL_DESCRIPTION,
         parameters: schema,
-        success: Schema.Unknown as ToolSchema<unknown>,
         execute: () => Effect.void,
       }),
     )
@@ -250,7 +249,7 @@ export function generateObject(options: GenerateObjectOptions<ToolSchema<any>> |
   const { jsonSchema, ...rest } = options
   return runGenerateObject(
     rest,
-    makeTool({
+    tool({
       description: GENERATE_OBJECT_TOOL_DESCRIPTION,
       jsonSchema,
       execute: () => Effect.void,
