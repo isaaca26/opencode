@@ -80,6 +80,10 @@ export function setAppQuitting(quitting = true) {
   registry.setQuitting(quitting)
 }
 
+export function isAppQuitting() {
+  return registry.quitting()
+}
+
 export function getLastFocusedWindow() {
   const focused = BrowserWindow.getFocusedWindow()
 

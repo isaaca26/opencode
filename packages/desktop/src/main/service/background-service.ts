@@ -15,6 +15,7 @@ const RegisteredService = Schema.Struct({ version: Schema.optional(Schema.String
 export interface Interface {
   readonly connection: Effect.Effect<SidecarCredentials.Data>
   readonly reconnect: Effect.Effect<SidecarCredentials.Data>
+  readonly stop: Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("opencode/desktop/BackgroundService") {}
@@ -24,12 +25,12 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const context = yield* Effect.context<FileSystem.FileSystem | Path.Path | DesktopCli.Service>()
 
-    return Service.of(
-      yield* BackgroundServiceState.make({
-        initial: connect("initial").pipe(Effect.provide(context)),
-        reconnect: connect("reconnect").pipe(Effect.provide(context), Effect.orDie),
-      }),
-    )
+    const state = yield* BackgroundServiceState.make({
+      initial: connect("initial").pipe(Effect.provide(context)),
+      reconnect: connect("reconnect").pipe(Effect.provide(context), Effect.orDie),
+    })
+
+    return Service.of({ ...state, stop: stop().pipe(Effect.provide(context)) })
   }),
 )
 
@@ -46,14 +47,7 @@ const connect = Effect.fn("BackgroundService.connect")(function* (mode: "initial
   if (isolated) process.env.XDG_STATE_HOME = app.getPath("userData")
   const client = yield* Effect.promise(() => import("@opencode/client/service"))
 
-  const file =
-    process.env.OPENCODE_DESKTOP_SERVER_CHANNEL === "local"
-      ? path.join(
-          process.env.XDG_STATE_HOME ?? path.join(app.getPath("home"), ".local", "state"),
-          "opencode",
-          "service-local.json",
-        )
-      : undefined
+  const file = registrationFile(path)
 
   const ensure = (required = version) =>
     client.Service.ensure({
@@ -119,6 +113,25 @@ const connect = Effect.fn("BackgroundService.connect")(function* (mode: "initial
 
   return ready
 })
+
+const stop = Effect.fn("BackgroundService.stop")(function* () {
+  const path = yield* Path.Path
+  const client = yield* Effect.promise(() => import("@opencode/client/service"))
+
+  yield* Effect.tryPromise(() => client.Service.stop({ file: registrationFile(path) })).pipe(
+    Effect.catch((error) => Effect.logError("failed to stop v2 background service", { error })),
+  )
+})
+
+function registrationFile(path: Path.Path) {
+  if (process.env.OPENCODE_DESKTOP_SERVER_CHANNEL !== "local") return
+
+  return path.join(
+    process.env.XDG_STATE_HOME ?? path.join(app.getPath("home"), ".local", "state"),
+    "opencode",
+    "service-local.json",
+  )
+}
 
 function endpoint(url: string | undefined) {
   if (!url || !URL.canParse(url)) return {}

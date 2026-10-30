@@ -1,6 +1,6 @@
 export * as ApplicationLifecycle from "./index"
 
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, powerMonitor } from "electron"
 import type { Event } from "electron"
 import { Context, Effect, Layer } from "effect"
 import { DeepLinksOpened } from "../../shared/ipc-rpc/events"
@@ -8,7 +8,14 @@ import { emitIpcEvent } from "../ipc-events"
 import { DesktopLogging, scoped } from "../native/logging"
 import { DesktopStorage } from "../storage"
 import { safeWebContentsURL } from "../windows/state"
-import { getLastFocusedWindow, getWindowByID, mainWindows, setAppQuitting, setRelaunchHandler } from "../windows"
+import {
+  getLastFocusedWindow,
+  getWindowByID,
+  isAppQuitting,
+  mainWindows,
+  setAppQuitting,
+  setRelaunchHandler,
+} from "../windows"
 import { marks } from "./marks"
 import { initializeFirstLaunchOnboarding } from "./onboarding"
 import { Shutdown } from "./shutdown"
@@ -20,6 +27,10 @@ export interface Interface {
   readonly consumeInitialDeepLinks: () => string[]
   readonly createWindow: () => BrowserWindow
   readonly restoreWindows: () => BrowserWindow[]
+  /** While enabled, a user's quit closes the windows and leaves the app running in the tray. */
+  readonly keepRunningOnQuit: (enabled: boolean) => void
+  /** Brings the app back from the tray, restoring the windows it closed. */
+  readonly reopen: () => void
 }
 
 export class Service extends Context.Service<Service, Interface>()("opencode/desktop/ApplicationLifecycle") {}
@@ -35,6 +46,8 @@ const runtime = Layer.effect(
     const pendingDeepLinks: string[] = []
     let shutdownReady = false
     let quitRequested = false
+    let keepRunning = false
+    let backgrounded = false
 
     // A hung shutdown step would otherwise leave every quit waiting on it forever.
     const prepareToRestart = shutdown.run.pipe(
@@ -71,6 +84,27 @@ const runtime = Layer.effect(
       return win
     }
 
+    // The windows close as they would for a quit, so reopening restores the same set.
+    const enterBackground = () => {
+      const windows = BrowserWindow.getAllWindows()
+      backgrounded = true
+      setAppQuitting()
+      windows.forEach((win) => win.close())
+
+      if (!windows.length) setAppQuitting(false)
+      app.dock?.hide()
+      runFork(Effect.logInfo("app moved to background", { windows: windows.length }))
+    }
+
+    const reopen = () => {
+      if (backgrounded) {
+        backgrounded = false
+        void app.dock?.show()
+      }
+
+      focusWindow(BrowserWindow.getAllWindows().length ? getLastFocusedWindow() : (restoreWindows()[0] ?? null))
+    }
+
     const relaunch = () => {
       setAppQuitting()
       runFork(
@@ -86,6 +120,7 @@ const runtime = Layer.effect(
     }
 
     const secondInstance = (_event: Event, argv: string[]) => {
+      if (backgrounded) reopen()
       const urls = argv.filter((arg) => arg.startsWith("opencode://"))
 
       if (urls.length) {
@@ -98,11 +133,22 @@ const runtime = Layer.effect(
 
     const openUrl = (event: Event, url: string) => {
       event.preventDefault()
+
+      if (backgrounded) reopen()
       runFork(Effect.logInfo("deep link received via open-url", { url }))
       focusWindow(emitDeepLinks([url]) ?? null)
     }
 
     const beforeQuit = (event: Event) => {
+      // Restarts, updates, signals and OS shutdown mark the app as quitting before they quit; only a
+      // user's quit arrives unmarked.
+      if (keepRunning && !isAppQuitting()) {
+        event.preventDefault()
+        enterBackground()
+
+        return
+      }
+
       quitRequested = true
       setAppQuitting()
 
@@ -140,14 +186,26 @@ const runtime = Layer.effect(
 
     // Electron emits this instead of will-quit when it lost track of a quit, so finish the one we asked for.
     const windowAllClosed = () => {
-      if (quitRequested || process.platform !== "darwin") app.quit()
+      if (backgrounded) return setAppQuitting(false)
+
+      if (quitRequested) return app.quit()
+
+      if (process.platform === "darwin") return
+
+      if (keepRunning) return enterBackground()
+      app.quit()
     }
 
     const activate = () => {
       if (quitRequested) return
 
+      if (backgrounded) return reopen()
+
       if (BrowserWindow.getAllWindows().length === 0) restoreWindows()
     }
+
+    // macOS sends a logout or shutdown as an ordinary quit, which must not be kept in the background.
+    const shutdownRequested = () => setAppQuitting()
 
     const resetRelaunchHandler = setRelaunchHandler(relaunch)
     let windowsWired = false
@@ -160,6 +218,7 @@ const runtime = Layer.effect(
     app.on("render-process-gone", renderProcessGone)
     process.on("SIGINT", signal)
     process.on("SIGTERM", signal)
+    powerMonitor.on("shutdown", shutdownRequested)
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         app.off("second-instance", secondInstance)
@@ -172,6 +231,7 @@ const runtime = Layer.effect(
         app.off("activate", activate)
         process.off("SIGINT", signal)
         process.off("SIGTERM", signal)
+        powerMonitor.off("shutdown", shutdownRequested)
         resetRelaunchHandler()
       }),
     )
@@ -190,6 +250,10 @@ const runtime = Layer.effect(
 
         return restoreWindows()
       },
+      keepRunningOnQuit: (enabled) => {
+        keepRunning = enabled
+      },
+      reopen,
     })
   }),
 )

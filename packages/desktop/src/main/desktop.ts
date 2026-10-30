@@ -7,6 +7,7 @@ import { DesktopInitialization } from "./lifecycle/desktop-initialization"
 import { installContextMenu } from "./lifecycle/environment"
 import { ApplicationLifecycle } from "./lifecycle"
 import { DesktopLogging } from "./native/logging"
+import { installTray } from "./native/tray"
 import { BackgroundService } from "./service/background-service"
 import { DesktopCli } from "./service/desktop-cli"
 import { marks } from "./lifecycle/marks"
@@ -24,6 +25,9 @@ const runIpc = Effect.fn("Desktop.runIpc")(function* () {
   // list, and menu items they contribute are present at startup. Their heavy modules load lazily on
   // first use.
   yield* Effect.forkScoped(plugins.start)
+  yield* Effect.forkScoped(
+    installTray().pipe(Effect.catchCause((cause) => Effect.logError("failed to install tray", { cause }))),
+  )
 
   if (lifecycle.restoreWindows().length) ipc.installMenu()
   // The first window's renderer now has its IPC port and is hydrating its stores over it. The crash
