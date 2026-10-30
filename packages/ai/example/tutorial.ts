@@ -1,7 +1,18 @@
 import { Config, Effect, Formatter, Schema, Stream } from "effect"
 import { HttpClientResponse } from "effect/http"
 import { NodeFileSystem } from "@effect/platform-node"
-import { AIClient, Image, LLM, LLMRequest, Media, Message, ProviderID, Tool, ToolRuntime, tool } from "@opencode/ai/effect"
+import {
+  AIClient,
+  Image,
+  LLM,
+  LLMRequest,
+  Media,
+  Message,
+  ProviderID,
+  ToolRuntime,
+  toDefinitions,
+  tool,
+} from "@opencode/ai/effect"
 import { Route, Auth, Endpoint, Framing, Protocol, RequestExecutor } from "@opencode/ai/route"
 import { OpenAI } from "@opencode/ai/providers"
 
@@ -99,7 +110,7 @@ const streamWithTools = Effect.gen(function* () {
     model,
     prompt: "Use get_weather for San Francisco, then answer in one sentence.",
     generation: { maxTokens: 80, temperature: 0 },
-    tools: Tool.toDefinitions(tools),
+    tools: toDefinitions(tools),
   })
   const events = Array.from(yield* LLM.stream(request).pipe(Stream.runCollect))
   for (const event of events) {

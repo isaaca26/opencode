@@ -3,7 +3,7 @@ import { Effect, Schema, SchemaGetter } from "effect"
 import { LLM } from "../src/effect.js"
 import { AnthropicMessages, Gemini, OpenAIChat, OpenAIResponses } from "../src/protocols.js"
 import { ToolSchemaProjection } from "../src/protocols/utils/tool-schema.js"
-import { Tool, toDefinitions, tool } from "../src/tool.js"
+import { toDefinitions, tool } from "../src/tool.js"
 import { Auth } from "../src/route.js"
 import { compileRequest } from "../src/route/client.js"
 import { it } from "./lib/effect.js"
@@ -32,7 +32,7 @@ const reversed = Token.pipe(
 describe("tool schema projections", () => {
   test("only normalizes typed empty input structs, preserving raw schemas and output schemas", () => {
     const schema = { not: { type: "null" } }
-    const definitions = Tool.toDefinitions({
+    const definitions = toDefinitions({
       typed: tool({
         description: "Typed",
         parameters: Schema.Struct({}),
@@ -49,7 +49,7 @@ describe("tool schema projections", () => {
   test("retains empty input descriptions and preserves named outputs and explicit raw schemas", () => {
     const parameters = Schema.Struct({}).annotate({ identifier: "Ping", description: "No arguments" })
     const raw = { $ref: "#/$defs/Raw", $defs: { Raw: { not: { type: "null" }, description: "Raw schema" } } }
-    const definitions = Tool.toDefinitions({
+    const definitions = toDefinitions({
       typed: tool({ description: "Ping", parameters, success: parameters, execute: () => Effect.succeed({}) }),
       raw: tool({ description: "Raw", jsonSchema: raw, execute: () => Effect.succeed({}) }),
     })
@@ -67,7 +67,7 @@ describe("tool schema projections", () => {
   })
 
   test("normalizes inputs whose encoded side is an empty struct", () => {
-    const definitions = Tool.toDefinitions({
+    const definitions = toDefinitions({
       defaulted: tool({ description: "Defaulted", parameters: defaulted, success: defaulted }),
       named: tool({
         description: "Named",
@@ -161,7 +161,7 @@ describe("tool schema projections", () => {
           LLM.request({
             model: scenario.route.with({ auth: Auth.bearer("test") }).model({ id: "test-model" }),
             prompt: "Use a tool.",
-            tools: Tool.toDefinitions({
+            tools: toDefinitions({
               ping: tool({
                 description: "Ping",
                 parameters: Schema.Struct({}),

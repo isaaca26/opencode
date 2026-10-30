@@ -18,7 +18,7 @@ import {
   type LanguageModelProviderOptions,
   type ToolEntryInput,
 } from "./schema/index.js"
-import { tool, toDefinitions, type AnyTool, type ExecutableTools, type ToolSchema } from "./tool.js"
+import { tool, toDefinitions, type ExecutableTool, type Tool, type ToolSchema } from "./tool.js"
 import { ToolRuntime } from "./tool-runtime.js"
 
 /** Input accepted by `LLM.request`, normalized into the canonical `LLMRequest` class. */
@@ -57,7 +57,7 @@ export type LoopInput<SelectedLanguageModel extends LanguageModel = LanguageMode
   RequestInput<SelectedLanguageModel>,
   "tools"
 > & {
-  readonly tools: ExecutableTools
+  readonly tools: Record<string, ExecutableTool>
   /** Called after each step that has tool calls; returning `true` ends the loop without running them. */
   readonly until?: (state: { readonly steps: ReadonlyArray<LLMResponse> }) => boolean
 }
@@ -185,10 +185,7 @@ export interface GenerateObjectDynamicOptions<SelectedLanguageModel extends Lang
   readonly jsonSchema: JsonSchema.JsonSchema
 }
 
-const runGenerateObject = Effect.fn("LLM.generateObject")(function* (
-  options: GenerateObjectBase,
-  tool: AnyTool,
-) {
+const runGenerateObject = Effect.fn("LLM.generateObject")(function* (options: GenerateObjectBase, tool: Tool) {
   const baseRequest = request(options)
   const generateRequest = LLMRequest.update(baseRequest, {
     tools: toDefinitions({ [GENERATE_OBJECT_TOOL_NAME]: tool }),

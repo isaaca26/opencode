@@ -1,5 +1,5 @@
 import { Effect, JsonSchema, Schema } from "effect"
-import { Tool } from "@opencode/schema/tool"
+import type { Content } from "@opencode/schema/tool"
 import type {
   Freeform,
   ToolCallPart,
@@ -34,7 +34,7 @@ export interface ToolModelOutputInput<Parameters, Output> {
 
 export type ToolToModelOutput<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> = (
   input: ToolModelOutputInput<Schema.Schema.Type<Parameters>, Success["Encoded"]>,
-) => ReadonlyArray<Tool.Content>
+) => ReadonlyArray<Content>
 
 type FreeformField<T> = {
   [K in keyof T]-?: [Exclude<keyof T, K>] extends [never]
@@ -65,7 +65,7 @@ export type FreeformOption<Parameters extends ToolSchema<any>> = [
  * Internally each tool also carries memoized codecs and a precomputed
  * `ToolDefinition` so callers do not rebuild them per invocation.
  */
-export interface Definition<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> {
+export interface Tool<Parameters extends ToolSchema<any> = any, Success extends ToolSchema<any> = any> {
   readonly description: string
   readonly parameters: Parameters
   readonly success: Success
@@ -74,7 +74,7 @@ export interface Definition<Parameters extends ToolSchema<any>, Success extends 
   readonly toStructuredOutput?: (output: Success["Encoded"]) => unknown
   /** @internal */
   readonly _decode: (input: unknown) => Effect.Effect<Schema.Schema.Type<Parameters>, Schema.SchemaError>
-  // Method syntax keeps these parameters bivariant, so a concrete tool stays assignable to `AnyExecutableTool`.
+  // Method syntax keeps these parameters bivariant, so a concrete tool stays assignable to `ExecutableTool`.
   /** @internal */
   _encode(value: Schema.Schema.Type<Success>): Effect.Effect<unknown, Schema.SchemaError>
   /** @internal */
@@ -85,18 +85,13 @@ export interface Definition<Parameters extends ToolSchema<any>, Success extends 
   readonly _definition: ToolDefinitionClass
 }
 
-export type AnyTool = Definition<any, any>
-
-export type ExecutableTool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> = Definition<
+/** A tool with an `execute` handler, which `LLM.loop` and `ToolRuntime.dispatch` can run. */
+export type ExecutableTool<Parameters extends ToolSchema<any> = any, Success extends ToolSchema<any> = any> = Tool<
   Parameters,
   Success
 > & {
   readonly execute: ToolExecute<Parameters, Success>
 }
-
-export type AnyExecutableTool = ExecutableTool<any, any>
-
-export type ExecutableTools = Record<string, AnyExecutableTool>
 
 /** Options shared by the Effect `tool` and the Promise `tool`; only `execute` differs. */
 export interface ToolOptions<Parameters extends ToolSchema<any>, Success extends ToolSchema<any>> {
@@ -115,16 +110,25 @@ export interface DynamicToolOptions {
   readonly jsonSchema: JsonSchema.JsonSchema
   readonly outputSchema?: JsonSchema.JsonSchema
   readonly freeform?: Freeform
-  readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<Tool.Content>
+  readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<Content>
   readonly toStructuredOutput?: (output: unknown) => unknown
 }
 
 type UnknownSuccess = typeof Schema.Unknown
 
-type AnyToolOptions = (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicToolOptions) & {
+export type AnyToolOptions = (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicToolOptions) & {
   readonly execute?: (params: any, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
 }
 
+export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): Tool
+export function tool(
+  config: DynamicToolOptions & {
+    readonly execute: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
+  },
+): ExecutableTool
+export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = UnknownSuccess>(
+  config: ToolOptions<Parameters, Success> & { readonly execute?: undefined },
+): Tool<Parameters, Success>
 /**
  * Constructs a tool whose `execute` returns an Effect. Two input modes:
  *
@@ -158,19 +162,15 @@ type AnyToolOptions = (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicTo
  * In both modes the produced tool flows through `toDefinitions(...)`
  * identically.
  */
-export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): AnyTool
-export function tool(
-  config: DynamicToolOptions & {
-    readonly execute: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
-  },
-): AnyExecutableTool
-export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = UnknownSuccess>(
-  config: ToolOptions<Parameters, Success> & { readonly execute?: undefined },
-): Definition<Parameters, Success>
 export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = UnknownSuccess>(
   config: ToolOptions<Parameters, Success> & { readonly execute: ToolExecute<Parameters, Success> },
 ): ExecutableTool<Parameters, Success>
-export function tool(config: AnyToolOptions): AnyTool {
+export function tool(config: AnyToolOptions): Tool {
+  return build(config)
+}
+
+/** @internal The untyped constructor behind both `tool`s, so the Promise one does not re-enter the overloads. */
+export const build = (config: AnyToolOptions): Tool => {
   if ("jsonSchema" in config) {
     return {
       description: config.description,
@@ -218,7 +218,7 @@ export function tool(config: AnyToolOptions): AnyTool {
 /**
  * A record of named tools. The record key becomes the tool name on the wire.
  */
-export type Tools = Record<string, AnyTool>
+export type Tools = Record<string, Tool>
 
 /**
  * Convert a tools record into the `ToolDefinition[]` shape that
@@ -271,7 +271,7 @@ const toJsonSchema = (schema: Schema.Top): JsonSchema.JsonSchema => {
 }
 
 const project = (
-  toModelOutput: ((input: ToolModelOutputInput<any, any>) => ReadonlyArray<Tool.Content>) | undefined,
+  toModelOutput: ((input: ToolModelOutputInput<any, any>) => ReadonlyArray<Content>) | undefined,
   toStructuredOutput: ((output: unknown) => unknown) | undefined,
   parameters: unknown,
   id: ToolCallPart["id"],
@@ -283,5 +283,3 @@ const project = (
   )
 
 export { ToolFailure }
-
-export * as Tool from "./tool.js"

@@ -6,14 +6,12 @@ import {
   ToolRuntime,
   toDefinitions,
   tool,
-  type AnyExecutableTool,
-  type AnyTool,
   type ExecutableTool,
+  type Tool,
 } from "../src/effect.js"
 import * as OpenAIChat from "../src/protocols/openai-chat.js"
 import { Auth } from "../src/route.js"
 import { AI } from "../src/index.js"
-import type { Definition } from "../src/tool.js"
 
 const request = LLM.request({
   model: OpenAIChat.route.with({ auth: Auth.bearer("fixture") }).model({ id: "gpt-4o-mini" }),
@@ -103,12 +101,12 @@ const effectSum: ExecutableTool<typeof sum.parameters, typeof Schema.Number> = t
   ...sum,
   execute: ({ a, b }) => Effect.succeed(a + b),
 })
-const promiseSum: ExecutableTool<typeof sum.parameters, typeof Schema.Number> = AI.tool({
+const promiseSum: AI.ExecutableTool<typeof sum.parameters, typeof Schema.Number> = AI.tool({
   ...sum,
   execute: async ({ a, b }, { signal }) => (signal.aborted ? 0 : a + b),
 })
-const effectDeclared: Definition<typeof sum.parameters, typeof Schema.Number> = tool(sum)
-const promiseDeclared: Definition<typeof sum.parameters, typeof Schema.Number> = AI.tool(sum)
+const effectDeclared: Tool<typeof sum.parameters, typeof Schema.Number> = tool(sum)
+const promiseDeclared: AI.Tool<typeof sum.parameters, typeof Schema.Number> = AI.tool(sum)
 toDefinitions({ effectSum, promiseSum, effectDeclared, promiseDeclared })
 
 tool({ ...sum, execute: () => new ToolFailure({ message: "No sum." }) })
@@ -120,6 +118,10 @@ tool({ ...sum, execute: ({ a, b }) => a + b })
 tool({ ...sum, execute: () => Effect.succeed("3") })
 // @ts-expect-error The execute result must match `success`.
 AI.tool({ ...sum, execute: async () => "3" })
+
+const options: AI.ToolOptions<typeof sum.parameters, typeof Schema.Number> = sum
+AI.tool({ ...options, execute: ({ a, b }) => a + b })
+tool({ ...options, execute: ({ a, b }) => Effect.succeed(a + b) })
 
 const unvalidated = {
   description: "Echo.",
@@ -134,8 +136,8 @@ const dynamic = {
   jsonSchema: { type: "object" },
   outputSchema: { type: "string" },
 }
-const effectDynamic: AnyExecutableTool = tool({ ...dynamic, execute: (params) => Effect.succeed(params) })
-const promiseDynamic: AnyExecutableTool = AI.tool({ ...dynamic, execute: async (params) => params })
-const effectDynamicDeclared: AnyTool = tool(dynamic)
-const promiseDynamicDeclared: AnyTool = AI.tool(dynamic)
+const effectDynamic: ExecutableTool = tool({ ...dynamic, execute: (params) => Effect.succeed(params) })
+const promiseDynamic: AI.ExecutableTool = AI.tool({ ...dynamic, execute: async (params) => params })
+const effectDynamicDeclared: Tool = tool(dynamic)
+const promiseDynamicDeclared: AI.Tool = AI.tool(dynamic)
 toDefinitions({ effectDynamic, promiseDynamic, effectDynamicDeclared, promiseDynamicDeclared })

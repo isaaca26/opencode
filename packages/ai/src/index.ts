@@ -36,13 +36,11 @@ import {
   type TranscriptionRequestInput,
 } from "./transcription.js"
 import {
-  Tool,
   ToolFailure,
-  type AnyExecutableTool,
-  type AnyTool,
-  type Definition,
+  build,
   type DynamicToolOptions,
   type ExecutableTool,
+  type Tool,
   type ToolExecuteContext,
   type ToolOptions,
   type ToolSchema,
@@ -142,7 +140,10 @@ export const make = <R = never>(options: Options<R> = {}) => {
     request: CheckpointRequest,
     options: TriggerCompactOptions & RunOptions,
   ): Promise<CompactionCheckpointResponse>
-  function compact(request: CompactionRequest, options?: EndpointCompactOptions & RunOptions): Promise<CompactionResponse>
+  function compact(
+    request: CompactionRequest,
+    options?: EndpointCompactOptions & RunOptions,
+  ): Promise<CompactionResponse>
   // The overloads pair each request type with its mechanism; `LLMClient.compact` checks the route's capability at runtime.
   function compact(
     request: CheckpointRequest | CompactionRequest,
@@ -294,17 +295,27 @@ export type PromiseToolExecute<Parameters extends ToolSchema<any>, Success exten
   context: Partial<ToolExecuteContext> & { readonly signal: AbortSignal },
 ) => Schema.Schema.Type<Success> | PromiseLike<Schema.Schema.Type<Success>>
 
-/**
- * The Effect `tool` with a plain or async `execute`. A throw or rejection becomes the error result the model sees, and
- * `signal` aborts when the loop is interrupted.
- */
-export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): AnyTool
+export function tool(config: DynamicToolOptions & { readonly execute?: undefined }): Tool
 export function tool(
   config: DynamicToolOptions & { readonly execute: PromiseToolExecute<ToolSchema<unknown>, ToolSchema<unknown>> },
-): AnyExecutableTool
+): ExecutableTool
 export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = typeof Schema.Unknown>(
   config: ToolOptions<Parameters, Success> & { readonly execute?: undefined },
-): Definition<Parameters, Success>
+): Tool<Parameters, Success>
+/**
+ * Constructs a tool whose `execute` returns a value or a Promise. It takes the same options as `tool` from
+ * `@opencode/ai/effect`: typed `parameters` (and an optional `success` schema that validates the result), or raw
+ * `jsonSchema`. A throw or rejection becomes the error result the model sees, and `signal` aborts when the loop is
+ * interrupted. Omit `execute` to declare a tool the model can call without running it here.
+ *
+ * ```ts
+ * tool({
+ *   description: "Add two numbers",
+ *   parameters: Schema.Struct({ a: Schema.Number, b: Schema.Number }),
+ *   execute: async ({ a, b }) => a + b,
+ * })
+ * ```
+ */
 export function tool<Parameters extends ToolSchema<any>, Success extends ToolSchema<any> = typeof Schema.Unknown>(
   config: ToolOptions<Parameters, Success> & { readonly execute: PromiseToolExecute<Parameters, Success> },
 ): ExecutableTool<Parameters, Success>
@@ -312,22 +323,31 @@ export function tool(
   config: (ToolOptions<ToolSchema<any>, ToolSchema<any>> | DynamicToolOptions) & {
     readonly execute?: PromiseToolExecute<ToolSchema<any>, ToolSchema<any>>
   },
-): AnyTool {
+): Tool {
   const execute = config.execute
-  // The overloads type each mode; the Effect implementation handles them all at runtime.
-  return Tool.tool({
+  return build({
     ...config,
     execute:
       execute &&
-      ((params: unknown, context?: ToolExecuteContext) =>
+      ((params, context) =>
         Effect.tryPromise({
           try: async (signal) => execute(params, { ...context, signal }),
           catch: (error) => new ToolFailure({ message: error instanceof Error ? error.message : String(error), error }),
         })),
-  } as Parameters<typeof Tool.tool>[0])
+  })
 }
 
 /** Default client over `RequestExecutor.fetchLayer` for scripts; the runtime builds its layer on first use. */
 export const ai = make()
 
 export * as AI from "./index.js"
+export type {
+  DynamicToolOptions,
+  ExecutableTool,
+  Tool,
+  ToolExecuteContext,
+  ToolModelOutputInput,
+  ToolOptions,
+  Tools,
+  ToolSchema,
+} from "./tool.js"
